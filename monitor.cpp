@@ -19,17 +19,19 @@ int handle_syscall(struct seccomp_notif *req, struct seccomp_notif_resp *resp, i
         case SCMP_SYS(openat):
         case SCMP_SYS(open):
             handle_openat(req, resp, notifyfd);
-            break;
+            return UAC_ALLOW_ONCE;
         default:
-            resp->error = -EPERM;
-            break;
+            //resp->error = -EPERM;
+            resp->error = 0;
+            resp->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+            return UAC_ALLOW;
     }
-
-    return 0;
 }
 
 int install_monitor(int sockfd, int pid) {
     int notifyfd = recvfd(sockfd);
+    int continue_mask[MAX_SYSCALL_NR] = { 0 };
+    int deny_mask[MAX_SYSCALL_NR] = { 0 };
 
     // listen for and handle notifications
     while (1) {
@@ -46,17 +48,38 @@ int install_monitor(int sockfd, int pid) {
         //    break;
         //}
 
+        int nr = req->data.nr;
 #ifdef DEBUG
-        printf("received %d\n", req->data.nr);
+        printf("received %d\n", nr);
 #endif
 
         resp->id = req->id;
 
-        // EPERM in case of exception?
-        if (handle_syscall(req, resp, notifyfd) == -1) {
-            //continue;
+        // fast path
+        if (continue_mask[nr]) {
+            resp->error = 0;
+            resp->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+        }
+        else if (deny_mask[nr]) {
             resp->error = -EPERM;
             resp->flags = 0;
+        }
+        else {
+            // slow path
+            int decision;
+            if ((decision = handle_syscall(req, resp, notifyfd)) == -1) {
+                // EPERM in case of exception?
+                //continue;
+                resp->error = -EPERM;
+                resp->flags = 0;
+            }
+
+            if (decision == UAC_ALLOW) {
+                continue_mask[nr] = 1;
+            }
+            else if (decision == UAC_DENY) {
+                deny_mask[nr] = 1;
+            }
         }
 
         seccomp_notify_respond(notifyfd, resp);
