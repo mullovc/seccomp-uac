@@ -17,6 +17,57 @@
 #define FORBIDDEN_SUBSTRING "passwd"
 #endif
 
+int handle_syscall(struct seccomp_notif *req, struct seccomp_notif_resp *resp) {
+    switch (req->data.nr) {
+        case SCMP_SYS(openat):
+        case SCMP_SYS(open):
+            uint64_t addr;
+            int memfd;
+            char *mempath;
+            char buf[4096];
+
+            if (req->data.nr == SCMP_SYS(open)) {
+                addr = req->data.args[0];
+            }
+            else { // req->data.nr == SCMP_SYS(openat)
+                addr = req->data.args[1];
+            }
+
+            asprintf(&mempath, "/proc/%d/mem", req->pid);
+            memfd = open(mempath, O_RDONLY);
+            free(mempath);
+            if (memfd < 0) {
+                perror("open");
+                return -1;
+            }
+            lseek(memfd, addr, SEEK_SET);
+            // missing null byte?
+            if (read(memfd, buf, 4096) == -1) {
+                perror("read");
+                close(memfd);
+                return -1;
+            }
+            close(memfd);
+
+#ifdef DEBUG
+            printf("read: %s\n", buf);
+#endif
+            if (strstr(buf, FORBIDDEN_SUBSTRING) != NULL) {
+                printf("Tried to access forbidden file!\n");
+                resp->error = -EPERM;
+            }
+            else {
+                resp->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+            }
+            break;
+        default:
+            resp->error = -EPERM;
+            break;
+    }
+
+    return 0;
+}
+
 int install_monitor(int sockfd, int pid) {
     int fd = recvfd(sockfd);
 
@@ -48,48 +99,11 @@ int install_monitor(int sockfd, int pid) {
 
         resp->id = req->id;
 
-        if (req->data.nr == SCMP_SYS(openat) || req->data.nr == SCMP_SYS(open)) {
-            uint64_t addr;
-            int memfd;
-            char *mempath;
-            char buf[4096];
-
-            if (req->data.nr == SCMP_SYS(open)) {
-                addr = req->data.args[0];
-            }
-            else { // req->data.nr == SCMP_SYS(openat)
-                addr = req->data.args[1];
-            }
-
-            asprintf(&mempath, "/proc/%d/mem", req->pid);
-            memfd = open(mempath, O_RDONLY);
-            free(mempath);
-            if (memfd < 0) {
-                perror("open");
-                continue;
-            }
-            lseek(memfd, addr, SEEK_SET);
-            // missing null byte?
-            if (read(memfd, buf, 4096) == -1) {
-                perror("read");
-                close(memfd);
-                continue;
-            }
-            close(memfd);
-
-#ifdef DEBUG
-            printf("read: %s\n", buf);
-#endif
-            if (strstr(buf, FORBIDDEN_SUBSTRING) != NULL) {
-                printf("Tried to access forbidden file!\n");
-                resp->error = -EPERM;
-            }
-            else {
-                resp->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
-            }
-        }
-        else {
+        // EPERM in case of exception?
+        if (handle_syscall(req, resp) == -1) {
+            //continue;
             resp->error = -EPERM;
+            resp->flags = 0;
         }
 
         seccomp_notify_respond(fd, resp);
