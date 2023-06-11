@@ -7,7 +7,7 @@ all: uac
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-uac: main.o sandbox.o monitor.o sendfd.o
+uac: main.o sandbox.o monitor.o sendfd.o syscall_handlers.o
 	$(CC) $(CFLAGS) -o $@ $+
 
 

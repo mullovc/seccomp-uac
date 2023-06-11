@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include <errno.h>
 #include <seccomp.h>
 #include <linux/unistd.h>
@@ -45,15 +44,16 @@ int init_sandbox(int sockfd) {
         return 1;
     }
 
-    int fd;
+    int notifyfd;
     // TODO error handling
-    fd = seccomp_notify_fd(ctx);
+    notifyfd = seccomp_notify_fd(ctx);
 
     // TODO error handling
-    sendfd(sockfd, fd);
+    sendfd(sockfd, notifyfd);
 #ifdef DEBUG
-    printf("fd: %d\n", fd);
+    printf("notify fd: %d\n", notifyfd);
 #endif
+    close(notifyfd);
 
     return 0;
 }
