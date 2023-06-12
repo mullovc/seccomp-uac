@@ -4,7 +4,7 @@ CFLAGS = -g -Wall -lseccomp -DDEBUG
 
 all: uac
 
-%.o: %.c
+%.o: %.cpp
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 uac: main.o sandbox.o monitor.o sendfd.o syscall_handlers.o
