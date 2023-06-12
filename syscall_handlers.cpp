@@ -14,12 +14,17 @@
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <libnotify/notify.h>
 #include "syscall_handlers.h"
 
 
 #ifndef FORBIDDEN_SUBSTRING
 #define FORBIDDEN_SUBSTRING "passwd"
 #endif
+
+int continue_mask[MAX_SYSCALL_NR] = { 0 };
+int deny_mask[MAX_SYSCALL_NR] = { 0 };
+
 
 int handle_openat(struct seccomp_notif *req, struct seccomp_notif_resp *resp, int notifyfd) {
     uint64_t addr;
@@ -71,10 +76,11 @@ int handle_openat(struct seccomp_notif *req, struct seccomp_notif_resp *resp, in
 #ifdef DEBUG
     printf("read: %s\n", path);
 #endif
+
+
     if (strstr(path, FORBIDDEN_SUBSTRING) != NULL) {
         printf("Tried to access forbidden file!\n");
         resp->error = -EPERM;
-        return 0;
     }
     else {
         int targetFd;
@@ -84,6 +90,8 @@ int handle_openat(struct seccomp_notif *req, struct seccomp_notif_resp *resp, in
             resp->val = fd;
             resp->error = -errno;
             resp->flags = 0;
+            seccomp_notify_respond(notifyfd, resp);
+            seccomp_notify_free(req, resp);
             return 0;
         }
 
@@ -103,6 +111,59 @@ int handle_openat(struct seccomp_notif *req, struct seccomp_notif_resp *resp, in
         resp->val = targetFd;
         resp->flags = 0;
     }
+    seccomp_notify_respond(notifyfd, resp);
+    seccomp_notify_free(req, resp);
 
+    return 0;
+}
+
+void callback_default(NotifyNotification* n, char* action, gpointer user_data) {
+    struct seccomp_notification_context *ctx = (struct seccomp_notification_context *)user_data;
+    struct seccomp_notif *req = ctx->req;
+    struct seccomp_notif_resp *resp = ctx->resp;
+    int notifyfd = ctx->notifyfd;
+
+    printf("action: %s\n", action);
+
+    resp->error = 0;
+    resp->flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+    seccomp_notify_respond(notifyfd, resp);
+    seccomp_notify_free(req, resp);
+    free(ctx);
+
+    continue_mask[req->data.nr] = 1;
+}
+
+int handle_default(struct seccomp_notif *req, struct seccomp_notif_resp *resp, int notifyfd) {
+    //GError *error = NULL;
+    notify_init("Basics");
+    char *syscall_name = seccomp_syscall_resolve_num_arch(SCMP_ARCH_NATIVE, req->data.nr);
+    NotifyNotification* n = notify_notification_new("UAC", syscall_name, NULL);
+    free(syscall_name);
+
+    struct seccomp_notification_context *ctx;
+    ctx = (struct seccomp_notification_context *)malloc(sizeof(seccomp_notification_context));
+    ctx->req = req;
+    ctx->resp = resp;
+    ctx->notifyfd = notifyfd;
+
+    notify_notification_add_action(n,
+                                   "action_yes",
+                                   "Allow",
+                                   NOTIFY_ACTION_CALLBACK(callback_default),
+                                   ctx,
+                                   NULL);
+    notify_notification_add_action(n,
+                                   "action_no",
+                                   "Deny",
+                                   NOTIFY_ACTION_CALLBACK(callback_default),
+                                   ctx,
+                                   NULL);
+
+    notify_notification_set_timeout(n, 10000);
+    if (!notify_notification_show(n, 0)) {
+        perror("notify_notification_show");
+        return -1;
+    }
     return 0;
 }

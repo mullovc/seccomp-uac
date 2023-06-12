@@ -1,6 +1,6 @@
 .PHONY: clean, mrproper
 CC = gcc
-CFLAGS = -g -Wall -lseccomp -DDEBUG
+CFLAGS = -g -Wall `pkg-config --cflags --libs libnotify libseccomp`
 
 all: uac
 
